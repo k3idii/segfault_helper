@@ -50,6 +50,9 @@ def try_parse_binary(segfault, path_to_binary):
     pass
   return ext
 
+def unstr(hexstr):
+  return ''.join(c if ord(c) > 20 and ord(c) < 126 else '?' for c in hexstr.decode('hex')[::-1])
+
 
 def parse_segfault_line(line, path_to_binary=None):
   if CHECK_SEGFAULT_AT and " segfault at " not in line:
@@ -62,6 +65,9 @@ def parse_segfault_line(line, path_to_binary=None):
     INFO['mem_addr'] = int(elements[pos+2],16)
     INFO['reg_ip'] = int(elements[pos+4],16)
     INFO['reg_sp'] = int(elements[pos+6],16)
+    INFO['mem_addr_str'] = unstr(elements[pos+2])
+    INFO['reg_ip_str'] = unstr(elements[pos+4])
+    INFO['reg_sp_str'] = unstr(elements[pos+6])
     INFO['err_code'] = int(elements[pos+8])
     INFO['err_str'] = ERRORS.get(INFO['err_code']," ?? ")
     fail_at = elements[pos+10]
@@ -106,9 +112,9 @@ def pprint_multi(info): ## TODO : wtf on 64 bit ;P
 >> BEGIN
   PROC  : {proc_name}
   PID   : {proc_pid}
-  MEM @ : 0x{mem_addr:08x}
-  EIP   : 0x{reg_ip:08x}
-  ESP   : 0x{reg_sp:08x}
+  MEM @ : 0x{mem_addr:08x}  [{mem_addr_str}]
+  EIP   : 0x{reg_ip:08x}  [{reg_ip_str}]
+  ESP   : 0x{reg_sp:08x}  [{reg_sp_str}]
   ECODE : {err_code} ({err_str})
   CRASH-LIB: {tgt[lib]}
   CRASH-MEM: 0x{tgt[mem_base]:08x} ... 0x{tgt[mem_end]:08x} (size 0x{tgt[mem_size]:08x})
@@ -162,7 +168,8 @@ def main():
       if not is_good_line(line, results.grep):
         continue
     info = parse_segfault_line(line, results.binary)
-    func(info)
+    if info is not None:
+      func(info)
     count += 1
     if results.count > 0 and count >= results.count:
       return
