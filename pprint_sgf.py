@@ -158,7 +158,7 @@ def main():
   
   count = 0
   for line in fh:
-    if len(results.grep)>0:
+    if results.grep is not None len(results.grep)>0:
       if not is_good_line(line, results.grep):
         continue
     info = parse_segfault_line(line, results.binary)
