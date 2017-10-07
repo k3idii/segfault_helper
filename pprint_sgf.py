@@ -24,7 +24,7 @@ def try_parse_binary(segfault, path_to_binary):
   lib_name = segfault['tgt']['lib']
   full_fn = os.path.join(path_to_binary, lib_name)
   if not os.path.isfile(full_fn):
-    return '{0} - file not found '.format(full_fn)
+    raise Exception('{0} - file not found '.format(full_fn))
   if full_fn not in DISASM_CACHE:
     tmp = tempfile.mkstemp('-disasm')[1]
     os.system('objdump -M intel -dSlr {inp} > {out}'.format(inp=full_fn, out=tmp))
@@ -51,7 +51,11 @@ def try_parse_binary(segfault, path_to_binary):
   return ext
 
 def unstr(hexstr):
-  return ''.join(c if ord(c) > 20 and ord(c) < 126 else '?' for c in hexstr.decode('hex')[::-1])
+  just = 2*4 
+  if len(hexstr) > just:
+    just = 2*8   
+  hexstr = hexstr.rjust(just, '0')
+  return ''.join(c if ord(c) >= 0x20 and ord(c) < 126 else '.' for c in hexstr.decode('hex')[::-1])
 
 
 def parse_segfault_line(line, path_to_binary=None):
@@ -112,13 +116,13 @@ def pprint_multi(info): ## TODO : wtf on 64 bit ;P
 >> BEGIN
   PROC  : {proc_name}
   PID   : {proc_pid}
-  MEM @ : 0x{mem_addr:08x}  [{mem_addr_str}]
-  EIP   : 0x{reg_ip:08x}  [{reg_ip_str}]
-  ESP   : 0x{reg_sp:08x}  [{reg_sp_str}]
+  MEM @ : 0x{mem_addr:016x}  [{mem_addr_str}]
+  EIP   : 0x{reg_ip:016x}  [{reg_ip_str}]
+  ESP   : 0x{reg_sp:016x}  [{reg_sp_str}]
   ECODE : {err_code} ({err_str})
   CRASH-LIB: {tgt[lib]}
-  CRASH-MEM: 0x{tgt[mem_base]:08x} ... 0x{tgt[mem_end]:08x} (size 0x{tgt[mem_size]:08x})
-  EIP-BASE : 0x{tgt[offset]:08x}  == EIP - BASE
+  CRASH-MEM: 0x{tgt[mem_base]:016x} ... 0x{tgt[mem_end]:016x} (size 0x{tgt[mem_size]:016x})
+  EIP-BASE : 0x{tgt[offset]:016x}  == EIP - BASE
 {bin_info}
 << SEGFAULT
   """.format(bin_info=bin_info, **info))
