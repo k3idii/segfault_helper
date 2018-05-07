@@ -132,16 +132,22 @@ def pprint_single(info):
   bin_info=''
   if info['binary'] is not None:
     bin_info = 'FILE={binary[file_path]}; LINE={binary[disasm_line]}'.format(**info)
-  print "PROC=[{proc_name}] PID={proc_pid} MEM=0x{mem_addr:08x} EIP=0x{reg_ip:08x} ESP=0x{reg_sp:08x} ERR={err_code} LIB=[{tgt[lib]}] MEM-BLOCK=0x{tgt[mem_base]:08x}...0x{tgt[mem_end]:08x} ADDR=0x{tgt[offset]:08x} BIN_INFO=[{bin_info}]".format(bin_info=bin_info, **info)
-
+  print("PROC=[{proc_name}] PID={proc_pid} MEM=0x{mem_addr:08x} EIP=0x{reg_ip:08x} ESP=0x{reg_sp:08x} ERR={err_code} LIB=[{tgt[lib]}] MEM-BLOCK=0x{tgt[mem_base]:08x}...0x{tgt[mem_end]:08x} ADDR=0x{tgt[offset]:08x} BIN_INFO=[{bin_info}]".format(bin_info=bin_info, **info))
 
 
 def pprint_json(info):  
   import json
-  print json.dumps(info)
+  print(json.dumps(info))
 
+FORMATTERS = {
+  "json" : pprint_json,
+  "single" : pprint_single,
+  "multi" : pprint_multi,
+}
 
-def is_good_line(line, array_of_str):
+FORMATTER_DEFAULT = "multi"
+
+def is_matching_line(line, array_of_str):
   for s in array_of_str:
     if s not in line:
       return False
@@ -149,37 +155,35 @@ def is_good_line(line, array_of_str):
 
 def main():
 
+  fmt_opts = ",".join(FORMATTERS.keys())
   parser = argparse.ArgumentParser(description='Segfault Parser')
-  parser.add_argument('--format', action="store", default="single", help="Output format, can be {singlie,multi,json}")
-  parser.add_argument('--logfile',action="store", help="log file", required=True)
+  parser.add_argument('--logfile',action="store",  help="Path to log (dmesg?) file", required=True)
+  parser.add_argument('--format', action="store",  help="Output format, can be [{0}], default = {1}".format(fmt_opts, FORMATTER_DEFAULT), default=FORMATTER_DEFAULT)
   parser.add_argument('--grep',   action="append", help="Look for lines containing this string. Can use multiple times.")
-  parser.add_argument('--binary', action="store", help="Path to directory containing binaries && libs.", default=None)
-  parser.add_argument('--count',  action="store", help="Exit after X parsed entries", default=-1, type=int)
-  results = parser.parse_args()
+  parser.add_argument('--bins',   action="store",  help="Path to directory containing binaries && libs. Default=None. If specified, script will try to find binary that caused fault (by name) and parse it", default=None)
+  parser.add_argument('--count',  action="store",  help="Exit after X parsed entries (like head ;)", default=-1, type=int)
+  parsed_args = parser.parse_args()
 
-  fh = open(results.logfile,'r')
-  func = None
-  if results.format == 'single':
-    func = pprint_single
-  if results.format == 'multi':
-    func = pprint_multi
-  if results.format == 'json':
-    func = pprint_json 
+  file_handle = open(parsed_args.logfile,'r')
+  func = FORMATTERS.get(parsed_args.format, None)
+  if func is None or not callable(func):
+    print("Invalid argument: output format")
+    return 1
   
   count = 0
-  for line in fh:
-    if results.grep is not None and len(results.grep)>0:
-      if not is_good_line(line, results.grep):
+  for line in file_handle:
+    if parsed_args.grep is not None and len(parsed_args.grep)>0:
+      # this way you don't need to pipe-grep-pipe
+      if not is_matching_line(line, parsed_args.grep):
         continue
-    info = parse_segfault_line(line, results.binary)
+    info = parse_segfault_line(line, parsed_args.bins)
     if info is not None:
       func(info)
     count += 1
-    if results.count > 0 and count >= results.count:
+    if parsed_args.count > 0 and count >= parsed_args.count:
       return
 
   
-
 if __name__ == "__main__":
   main()
   for f in DISASM_CACHE: # clear cache ... 
