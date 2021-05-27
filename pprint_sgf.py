@@ -7,14 +7,18 @@ import yaml
 
 KEYWORD = "segfault"
 ERRORS = {
- 4 : "READ",
- 6 : "WRITE", 
+ 4 : "READ from unmapped",
+ 5 : "READ from non-readable",
+ 6 : "WRITE to unmapped",
+ 7 : "WRITE to non-writable", 
+ 14: "EXEC at unmapped",
+ 15: "EXEC at non-exec",
 }
 CHECK_SEGFAULT_AT = True
 
 DISASM_CACHE={}
 
-CTX_LINES = 3
+CTX_LINES = 1
 
 
 
@@ -36,6 +40,7 @@ def try_parse_binary(info, path_to_binary):
   if full_fn not in DISASM_CACHE:
     tmp = tempfile.mkstemp(DISASM_SUFIX)[1]
     objdump_cmd = 'objdump -M intel -dlr {inp} > {out}'.format(inp=full_fn, out=tmp)
+    #print(objdump_cmd)
     os.system(objdump_cmd)
     DISASM_CACHE[full_fn] = tmp
     ext['_objdump'] = objdump_cmd
@@ -43,52 +48,70 @@ def try_parse_binary(info, path_to_binary):
   ext['_tmp_path'] = DISASM_CACHE[full_fn]
   ext['disasm_line'] = ''
   ext['disasm_context'] = '' 
-  look_for = '{0:x}:\t'.format(info["fail"]["binary_offset"])
-  ext['_loog_for'] = look_for
+  #print(info['fail'])
+  look_for = '{0:x}:'.format(info["fail"]["binary_offset"])[-5:]
+  ext['_look_for'] = look_for
   grep_args = ['grep']
   grep_args.append('-C{0}'.format(CTX_LINES))
-  grep_args.append('-e')
+  #grep_args.append('-e')
   grep_args.append(look_for)
   grep_args.append(DISASM_CACHE[full_fn])
+  #print(grep_args)
   try:
-    lines = subprocess.check_output(grep_args).strip("\n").split("\n")
+    lines = subprocess.check_output(grep_args).decode()
+    lines = lines.strip("\n").split("\n")
     #print(lines)
     ext['disasm_context'] = lines
-    ext['disasm_line'] = lines[CTX_LINES]
   except Exception as err:
+    #print(err)
     ext['_grep_fail'] = str(err)
   return ext
 
-def unstr(hexstr):
-  just = 2*4 
-  if len(hexstr) > just:
-    just = 2*8   
-  hexstr = hexstr.rjust(just, '0')
-  return ''.join(c if ord(c) >= 0x20 and ord(c) < 126 else '.' for c in hexstr.decode('hex')[::-1])
 
 # deadbeef ip 0000000000400558 sp 00007ffce3073ee0 error 4 in segf.o[400000+1000]
-FIELDS = [ "process", "__seg", "__at", "mem_addr","__ip","reg_ip","__sp","reg_sp","__er","error_code","__in","fail_org" ]
+FIELDS = [ 
+  "process", 
+  "__str_seg", 
+  "__str_at", 
+  "mem_addr",
+  "__str_ip",
+  "reg_ip",
+  "__str_sp",
+  "reg_sp",
+  "__str_err",
+  "error_code",
+  "__str_in",
+  "fail_org"
+]
+
+def hex_to_string_guess(hexstr):
+  #print(hexstr)
+  if len(hexstr)%2:
+    hexstr = '0' + hexstr
+  return ''.join( list(chr(c) if c > 0x20 and c < 127 else '.' for c in bytes.fromhex(hexstr)[::-1]))
 
 def parse_segfault_line(line):
+  #print(line)
   if CHECK_SEGFAULT_AT and " segfault at " not in line:
-    raise EXception("no 'segfault at' in line !")
+    raise Exception("no 'segfault at' in line !")
   #line = line.split("segfault at",1)[1] # cut useless stuff
 
   elements = line.strip().split(" ")
   keyword_pos = elements.index(KEYWORD)
   elements = elements[keyword_pos-1:]
   info = dict(zip(FIELDS, elements))
-  for key in info.keys():
-    if key.startswith("__"):
-      del info[key]
+  #print(info)
+  #for key in info.keys():
+  #  if key.startswith("__"):
+  #    del info[key]
 
   info['process_name'], info['process_pid'] = info['process'][:-2].split("[",1)
 
   for key in ['mem_addr', 'reg_ip', 'reg_sp']:
-    info['{0}_str'.format(key)] = unstr(info[key])
+    info['{0}_str'.format(key)] = hex_to_string_guess(info[key])
     info[key] = HexInt(info[key], 16)
   
-  info['error_str'] = ERRORS.get(info['error_code'], "<unknown code>")
+  info['error_str'] = ERRORS.get(int(info['error_code']), "<unknown code>")
   fail_file, fail_rva = info['fail_org'][:-1].split("[")
   fail_base, fail_size = [HexInt(x,16) for x in fail_rva.split("+",1)]
   
@@ -100,9 +123,12 @@ def parse_segfault_line(line):
   info['fail'] = dict(
     binary = fail_file,
     mem_base = fail_base,
+    mem_base_hex = f"{fail_base:08X}",
     mem_size = fail_size,
+    mem_seize_hex = f"{fail_base:08X}",
     mem_end = HexInt(fail_base + fail_size),
     binary_offset = HexInt(fail_offset),
+    binary_offset_hex = f"{fail_offset:08X}"
   )
   # print(pprint_yaml(info))
   return info
@@ -112,15 +138,19 @@ def parse_segfault_line(line):
 def pprint_multi(info): ## TODO : wtf on 64 bit ;P
   bin_info = ''  
   if info['binary'] is not None:
-    bin_info = """    
-  >> BINARY
-    FILE PATH : {binary[file_path]}
-    LINE : [ {binary[disasm_line]} ]
-    -- disasm -- 8< --
-{lines}
-    -- disasm -- 8< --   
-  << BINARY  
-""".format(lines='\n'.join(info['binary']['disasm_context']),**info)
+    if info['binary']['status']:
+    #print(info['binary'])
+      bin_info = """    
+      >> BINARY
+        FILE PATH : {binary[file_path]}
+        -- disasm -- 8< --
+    {lines}
+        -- disasm -- 8< --   
+      << BINARY  
+    """.format(lines='\n'.join(info['binary']['disasm_context']),**info)
+    else:
+      bin_info = str(info['binary'])
+    
 
   print("""
 >> BEGIN
@@ -152,7 +182,7 @@ def pprint_single(info):
   ]
   if info['binary'] is not None:
     tpl.append('BIN_FILE={binary[file_path]}')
-    tpl.append('BIN_LINE=[[{binary[disasm_line]}]]')
+    #tpl.append('BIN_LINE=[[{binary[disasm_line]}]]')
 
   print(" ".join(tpl).format(**info))
 
@@ -214,15 +244,17 @@ def main():
     info = None
     try:
       info = parse_segfault_line(line)
-    except:
-      pritn("<parsing failed?>")
+    except Exception as ex:
+      print("<parsing failed : " + str(ex) )
       continue
     info['binary'] = None  
     if  parsed_args.bins:
       
       try:
         info['binary'] = try_parse_binary(info, parsed_args.bins)
-      except:
+        info['binary']['status'] = 1
+      except Exception as ex:
+        info['binary'] = dict(status=0, err=str(ex))
         pass
 
     if info is not None:
